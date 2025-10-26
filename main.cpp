@@ -14,9 +14,9 @@ int main()
     Tintin_reporter reporter;
     reporter.setFileName("daemon.log");
     reporter.writeLog(std::string("Started."), std::string("INFO"));
-    Daemon daemon;
-    daemon.start(reporter);
+    Daemon daemon(reporter);
+    daemon.start();
     // start server operations here
-    
+
     return 0;
 }

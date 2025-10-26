@@ -57,12 +57,12 @@ void Tintin_reporter::createDirectoryIfNotExists()
     }
 }
 
-void Tintin_reporter::setMessage(const std::string &msg,const std::string &message_type)
+void Tintin_reporter::setMessage(const std::string &msg, const std::string &message_type)
 {
 
     if (message_type != "INFO" && message_type != "ERROR" && message_type != "LOG")
         throw std::invalid_argument("message type error");
-    message = "["+  message_type + "] " + msg;
+    message = "[" + message_type + "] " + msg;
     std::time_t rawtime;
     std::time(&rawtime);
 
@@ -93,24 +93,47 @@ std::string Tintin_reporter::getFileName() const
     return file_name;
 }
 
+int Tintin_reporter::getLogFileDescriptor() const
+{
+    return log_fd;
+}
+
 #include <iostream>
 #include <fstream>
 #include <string>
 
-void Tintin_reporter::writeLog(const std::string &msg,const std::string &message_type)
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+void Tintin_reporter::writeLog(const std::string &msg, const std::string &message_type)
 {
-    // Create the full path
+    // Prepare message
     this->setMessage(msg, message_type);
     std::string full_path = default_folder + file_name;
-    std::ofstream log_stream(full_path, std::ios::app);
-    if (!log_stream.is_open())
+
+    // Open once (append mode)
+    int fd = ::open(full_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd == -1)
     {
         std::cerr << "Error opening log file: " << full_path
                   << " - " << std::strerror(errno) << std::endl;
+        log_fd = -1;
         return;
     }
 
+    // Keep descriptor for later retrieval/use
+    log_fd = fd;
 
-    log_stream << message << std::endl;
-    log_stream.close();
+    // Write the message (with newline)
+    std::string to_write = message + "\n";
+    ssize_t written = ::write(fd, to_write.data(), to_write.size());
+    if (written == -1)
+    {
+        std::cerr << "Error writing to log file: " << full_path
+                  << " - " << std::strerror(errno) << std::endl;
+    }
+
+    // Intentionally do not close fd here so getLogFileDescriptor() remains valid.
 }

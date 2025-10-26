@@ -29,6 +29,7 @@ class Tintin_reporter
         std::string message;
         std::string file_name;
         std::string default_folder;
+        int log_fd;
 
         void createDirectoryIfNotExists();
 
@@ -42,7 +43,7 @@ class Tintin_reporter
         std::string getMessage() const;
         void setFileName(const std::string &fname);
         std::string getFileName() const ;
-
+        int getLogFileDescriptor() const;
         void writeLog(const std::string &msg,const std::string &message_type);
 };
 
