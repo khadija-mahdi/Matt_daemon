@@ -6,9 +6,59 @@
 #include <cstring>
 #include <arpa/inet.h>
 #include <signal.h>
+#include "helper.hpp"
+
+// Add these at the top of server.cpp, after includes
+
+bool isHttpRequest(const std::string &data)
+{
+    return (data.size() >= 4 &&
+            (data.substr(0, 4) == "GET " ||
+             data.substr(0, 5) == "POST " ||
+             data.substr(0, 5) == "HEAD "));
+}
+
+
+
+void sendHttpResponse(int client_fd, const std::string &content,
+                      const std::string &contentType = "text/html")
+{
+    std::stringstream response;
+
+    response << "HTTP/1.1 200 OK\r\n";
+    response << "Content-Type: " << contentType << "; charset=utf-8\r\n";
+    response << "Content-Length: " << content.length() << "\r\n";
+    response << "Access-Control-Allow-Origin: *\r\n";
+    response << "Cache-Control: no-cache\r\n";
+    response << "Connection: close\r\n";
+    response << "\r\n";
+    response << content;
+
+    std::string resp = response.str();
+    send(client_fd, resp.c_str(), resp.length(), 0);
+}
+
+void sendStatusJSON(int client_fd, time_t start_time, int client_count, int total_messages)
+{
+    time_t now = time(NULL);
+    time_t uptime = now - start_time;
+
+    std::stringstream json;
+    json << "{\n";
+    json << "  \"status\": \"running\",\n";
+    json << "  \"uptime\": " << uptime << ",\n";
+    json << "  \"active\": " << client_count << ",\n";
+    json << "  \"max\": 3,\n";
+    json << "  \"active_connections\": \"" << client_count << "/3\",\n";
+    json << "  \"total_messages\": " << total_messages << ",\n";
+    json << "  \"timestamp\": " << now << "\n";
+    json << "}";
+
+    sendHttpResponse(client_fd, json.str(), "application/json");
+}
 
 Server::Server(Tintin_reporter &reporter)
-    : reporter(reporter), running(false), start_time(false),
+    : reporter(reporter), running(false), start_time(0),
       client_count(0), total_messages(0), listen_fd(-1)
 {
     std::memset(buffer, 0, sizeof(buffer));
@@ -22,7 +72,7 @@ void Server::start()
 {
     if (running.load())
         return;
-
+    
     listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_fd < 0)
     {
@@ -53,8 +103,7 @@ void Server::start()
     }
 
     running = true;
-    start_time = true;
-
+    start_time = time(NULL);
     fd_set readfds;
     int max_sd;
 
@@ -111,20 +160,17 @@ void Server::start()
 
             if (!added)
             {
-                // Max clients reached
                 ::close(new_socket);
             }
         }
         std::string response;
 
-        // Check for I/O on existing clients
         for (int i = 0; i < MAX_CLIENTS; i++)
         {
             int sd = client_sockets[i];
 
             if (sd > 0 && FD_ISSET(sd, &readfds))
             {
-                // IMPORTANT: Clear buffer before reading
                 std::memset(buffer, 0, sizeof(buffer));
 
                 ssize_t res = recv(sd, buffer, sizeof(buffer) - 1, 0);
@@ -138,11 +184,31 @@ void Server::start()
 
                 buffer[res] = '\0';
                 std::string msg(buffer);
+                // ===== CHECK IF IT'S AN HTTP REQUEST =====
+                if (isHttpRequest(msg))
+                {
+                    reporter.writeLog("HTTP request received", "INFO");
 
-                // Strip trailing newlines and carriage returns
-                // In server.cpp - Update the message handling part
+                    // Check if requesting status JSON
+                    if (msg.find("GET /status") != std::string::npos)
+                    {
+                        sendStatusJSON(sd, start_time, client_count.load(), total_messages.load());
+                        reporter.writeLog("Sent status JSON", "INFO");
+                    }
+                    // Otherwise send dashboard HTML
+                    else
+                    {
+                        std::string html = loadDashboardHTML();
+                        sendHttpResponse(sd, html);
+                        reporter.writeLog("Sent dashboard HTML", "INFO");
+                    }
 
-                // Inside the message handling loop, replace this section:
+                    // Close connection after HTTP response
+                    closeClient(i);
+                    --client_count;
+                    continue;
+                }
+
                 if (!msg.empty())
                 {
                     msg.erase(msg.find_last_not_of("\r\n") + 1);
@@ -153,7 +219,6 @@ void Server::start()
                         break;
                     }
 
-                    // ===== ADD COMMAND HANDLING HERE =====
                     std::string response;
                     reporter.writeLog("Received command: " + msg, "INFO");
                     if (msg == "help")

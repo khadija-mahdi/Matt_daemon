@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Daemon Status</title>
+  <style>
+    :root{font-family:Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+    body{display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f172a;color:#e6eef8}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));padding:28px;border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6);width:420px}
+    h1{font-size:20px;margin:0 0 12px}
+    .row{display:flex;justify-content:space-between;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.01);margin-bottom:8px}
+    .label{opacity:.8}
+    .value{font-weight:700}
+    .status-up{color:#4ade80}
+    .status-down{color:#fb7185}
+    .footer{margin-top:12px;font-size:13px;color:rgba(230,238,248,0.65)}
+    .meta{font-size:12px;color:rgba(230,238,248,0.55);margin-top:6px}
+    .small-btn{background:transparent;border:1px solid rgba(230,238,248,0.06);padding:6px 8px;border-radius:8px;color:inherit;cursor:pointer}
+    .error{color:#ffb4b4}
+  </style>
+</head>
+<body>
+  <div class="card" role="region" aria-label="Daemon status card">
+    <h1>Daemon Status</h1>
+
+    <div id="daemonState" class="row">
+      <div class="label">Status</div>
+      <div id="statusValue" class="value">—</div>
+    </div>
+
+    <div id="uptimeRow" class="row">
+      <div class="label">Uptime</div>
+      <div id="uptimeValue" class="value">—</div>
+    </div>
+
+    <div id="connectionsRow" class="row">
+      <div class="label">Active connections</div>
+      <div id="connectionsValue" class="value">—</div>
+    </div>
+
+    <div id="messagesRow" class="row">
+      <div class="label">Total messages</div>
+      <div id="messagesValue" class="value">—</div>
+    </div>
+
+    <div class="footer">
+      <div class="meta">Source: <span id="sourceHost">http://localhost:4242</span></div>
+      <div style="margin-top:6px;display:flex;gap:8px;align-items:center">
+        <button id="refreshBtn" class="small-btn">Refresh now</button>
+        <button id="toggleWsBtn" class="small-btn">Enable WebSocket</button>
+        <div id="lastSeen" class="meta" style="margin-left:auto">Last update: —</div>
+      </div>
+      <div id="errorBox" class="meta error" style="margin-top:8px;display:none"></div>
+    </div>
+  </div>
+
+<script>
+// Configuration: change host or path if your server exposes a different endpoint
+const HOST = location.hostname === 'localhost' ? 'http://localhost:4242' : 'http://localhost:4242';
+const STATUS_PATH = '/status'; // try HOST + STATUS_PATH
+const WS_ENABLED_DEFAULT = false; // start with polling
+
+const statusValue = document.getElementById('statusValue');
+const uptimeValue = document.getElementById('uptimeValue');
+const connectionsValue = document.getElementById('connectionsValue');
+const messagesValue = document.getElementById('messagesValue');
+const lastSeen = document.getElementById('lastSeen');
+const errorBox = document.getElementById('errorBox');
+const sourceHost = document.getElementById('sourceHost');
+const refreshBtn = document.getElementById('refreshBtn');
+const toggleWsBtn = document.getElementById('toggleWsBtn');
+
+sourceHost.textContent = HOST + (STATUS_PATH || '');
+
+let ws;
+let wsEnabled = WS_ENABLED_DEFAULT;
+let pollHandle = null;
+
+function fmtUptime(sec){
+  if (typeof sec !== 'number' || !isFinite(sec)) return '—';
+  const d = Math.floor(sec / 86400);
+  sec %= 86400;
+  const h = Math.floor(sec / 3600);
+  sec %= 3600;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  const parts = [];
+  if (d) parts.push(d+'d');
+  if (h) parts.push(h+'h');
+  if (m) parts.push(m+'m');
+  parts.push(s+'s');
+  return parts.join(' ');
+}
+
+function setError(msg){
+  if (!msg) { errorBox.style.display='none'; errorBox.textContent=''; return; }
+  errorBox.style.display='block';
+  errorBox.textContent = msg;
+}
+
+function applyData(data){
+  // Try to be tolerant to a few possible shapes
+  // Example expected JSON:
+  // { "status": "running", "uptime": 3600, "active": 1, "max": 3, "active_connections": "1/3", "total_messages": 42 }
+  try {
+    statusValue.textContent = data.status || data.state || (data.running ? 'running' : 'stopped') || 'unknown';
+
+    const upCandidates = [data.uptime, data.uptime_seconds, data.uptime_secs, data.seconds_up, data.uptime_s];
+    const up = upCandidates.find(x => typeof x === 'number');
+    uptimeValue.textContent = up !== undefined ? fmtUptime(up) + ' (' + up + ' seconds)' : (data.uptime_str || '—');
+
+    // connections
+    let connText = '—';
+    if (typeof data.active_connections === 'string') connText = data.active_connections;
+    else if (typeof data.active === 'number' && typeof data.max === 'number') connText = data.active + '/' + data.max;
+    else if (typeof data.active === 'number' && data.connections_limit) connText = data.active + '/' + data.connections_limit;
+    else if (Array.isArray(data.connections)) connText = data.connections.length + '/' + (data.connections_limit || '—');
+    connectionsValue.textContent = connText;
+
+    // messages
+    const msgs = data.total_messages ?? data.total_msgs ?? data.messages ?? data.msg_count ?? data.total;
+    messagesValue.textContent = (msgs !== undefined) ? String(msgs) : '—';
+
+    lastSeen.textContent = 'Last update: ' + (new Date()).toLocaleString();
+    setError(null);
+  } catch (e){
+    setError('Failed to parse data: ' + e.message);
+  }
+}
+
+async function fetchStatus(){
+  try{
+    const res = await fetch(HOST + STATUS_PATH, {cache:'no-store'});
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    applyData(data);
+    return true;
+  } catch (err){
+    setError('Polling error: ' + err.message);
+    return false;
+  }
+}
+
+function startPolling(){
+  stopPolling();
+  fetchStatus();
+  pollHandle = setInterval(fetchStatus, 5000);
+}
+function stopPolling(){ if (pollHandle) { clearInterval(pollHandle); pollHandle = null; } }
+
+function startWebSocket(){
+  stopPolling();
+  try{
+    const wsUrl = (HOST.startsWith('https')? 'wss' : 'ws') + '://' + HOST.replace(/^https?:\/\//,'').replace(/:\d+$/, '') + ':4242';
+    ws = new WebSocket(wsUrl);
+    ws.onopen = () => { toggleWsBtn.textContent = 'Disable WebSocket'; setError(null); };
+    ws.onmessage = evt => {
+      try{
+        const data = JSON.parse(evt.data);
+        applyData(data);
+      } catch(e){ setError('Bad WS payload: '+e.message); }
+    };
+    ws.onerror = e => setError('WebSocket error');
+    ws.onclose = () => { toggleWsBtn.textContent = 'Enable WebSocket'; setError('WebSocket closed'); };
+  } catch(e){ setError('Failed to open WebSocket: '+e.message); }
+}
+function stopWebSocket(){ if (ws){ try{ ws.close(); } catch(e){} ws=null; } }
+
+refreshBtn.addEventListener('click', ()=>{ if (!wsEnabled) fetchStatus(); else setError('Using WebSocket — real-time updates expected'); });
+
+toggleWsBtn.addEventListener('click', ()=>{
+  wsEnabled = !wsEnabled;
+  if (wsEnabled){ startWebSocket(); }
+  else { stopWebSocket(); startPolling(); toggleWsBtn.textContent = 'Enable WebSocket'; }
+});
+
+// Initial behaviour
+if (wsEnabled) startWebSocket(); else startPolling();
+
+// Expose a small API for manual override from console
+window.__daemonMonitor = { startPolling, stopPolling, startWebSocket, stopWebSocket, fetchStatus };
+</script>
+</body>
+</html>
