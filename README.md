@@ -6,7 +6,6 @@
 - [**khadija-mahdi**](https://github.com/khadija-mahdi)
 
 [![C++](https://img.shields.io/badge/C++-17-blue.svg)](https://isocpp.org/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](https://www.linux.org/)
 
 A Unix daemon implementation in C++ that runs as a background service with network capabilities, comprehensive logging, and remote management features.
